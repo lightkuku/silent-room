@@ -1,4 +1,4 @@
-name: Deploy Silent Room to Cloudflare Workers
+name: Deploy to Cloudflare Workers
 
 on:
   push:
