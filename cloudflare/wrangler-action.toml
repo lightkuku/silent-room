@@ -1,0 +1,38 @@
+name = "${NAME}"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+workers_dev = true
+preview_urls = true
+
+[vars]
+SITE_TITLE = "${SITE_TITLE}"
+SITE_VERSION = "${VERSION}"
+SITE_DESCRIPTION = "安全加密的即时通讯应用"
+SITE_FAVICON = "/logo.svg"
+SITE_LOGO = "/logo.svg"
+CLEAR_HISTORY_DAYS = 3
+MAX_UPLOAD_SIZE = 200
+ENVIRONMENT = "production"
+
+[[durable_objects.bindings]]
+name = "CHAT"
+class_name = "ChatRoom"
+
+[triggers]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "${R2_BUCKET_NAME}"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "${NAME}-chat"
+database_id = "${D1_DATABASE_ID}"
+
+[[kv_namespaces]]
+binding = "UPLOADS"
+id = "${KV_NAMESPACE_ID}"

@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+# package-lock.json
+
+# 构建产物
+dist/
+
+# Cloudflare 本地状态
+.wrangler/
+.cloudflare/
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+
+# 部署脚本（已在 workflow 中）
+deploy-local.sh
+deploy.sh
+github_deploy.sh
+DEPLOY_NO_NODE.md
+DEPLOY_STEPS.md
+
+# 其他
+github-workflows/

@@ -1,0 +1,378 @@
+name: Deploy Silent Room to Cloudflare Workers
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      custom_domain:
+        description: Custom domain (e.g., chat.example.com)
+        required: false
+        type: string
+
+jobs:
+  Deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    env:
+      NAME: ${{ secrets.NAME || vars.NAME || 'silent-room' }}
+      SITE_TITLE: ${{ secrets.NAME || vars.NAME || 'Silent Room' }}
+      VERSION: ${{ secrets.VERSION || vars.VERSION || '2.0.1' }}
+      CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
+      USE_ROUTES: ${{ secrets.USE_ROUTES || vars.USE_ROUTES || 'true' }}
+      FRONTEND_URL: ${{ secrets.FRONTEND_URL || vars.FRONTEND_URL || 'https://silent-room.pages.dev' }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID || vars.D1_DATABASE_ID }}
+      KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID || vars.KV_NAMESPACE_ID }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME || 'silent-room-files' }}
+      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY || vars.TURNSTILE_SECRET_KEY || '' }}
+      TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY || vars.TURNSTILE_SITE_KEY || '' }}
+      ALLOWED_DOMAINS: ${{ secrets.ALLOWED_DOMAINS || vars.ALLOWED_DOMAINS }}
+
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD || vars.ADMIN_PASSWORD }}
+      JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || vars.JWT_SECRET_KEY }}
+      CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY || vars.CSRF_SECRET_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || vars.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN || vars.CLOUDFLARE_AI_TOKEN }}
+      PASSWORD_SALT: ${{ secrets.PASSWORD_SALT || vars.PASSWORD_SALT }}
+
+    outputs:
+      worker_url: ${{ steps.deploy.outputs.worker_url }}
+
+    steps:
+      - name: 🚚 检出代码仓库 / Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙ 设置 Node.js / Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: 📦 安装前端依赖 / Install frontend dependencies
+        run: npm install
+
+      - name: ⚙ 设置 Node.js for Cloudflare / Set up Node.js for Cloudflare
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: 📦 安装后端依赖 / Install backend dependencies
+        run: npm install
+        working-directory: ./cloudflare
+
+      - name: 🌍 设置 Cloudflare 环境变量 / Set Cloudflare environment
+        run: |
+          cd cloudflare
+          echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" > .env
+          echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID" >> .env
+
+      - name: 📡 禁用 Wrangler 遥测 / Disable wrangler telemetry
+        working-directory: ./cloudflare
+        run: npx wrangler telemetry disable
+
+      - name: 🛠️ 设置环境 / Set up environment
+        run: |
+          echo "🔐 Starting environment setup..."
+          
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_API_TOKEN variable cannot be empty."
+            exit 1
+          fi
+          
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "❌ CLOUDFLARE_ACCOUNT_ID variable cannot be empty."
+            exit 1
+          fi
+          
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            echo "❌ ADMIN_PASSWORD variable cannot be empty."
+            exit 1
+          fi
+          
+          if [ -z "$PASSWORD_SALT" ]; then
+            echo "❌ PASSWORD_SALT variable cannot be empty."
+            exit 1
+          fi
+          
+          if [ -z "$JWT_SECRET_KEY" ] || grep -q '[?%#/\\]' <<< "$JWT_SECRET_KEY"; then
+            echo "❌ JWT_SECRET_KEY variable is empty or contains invalid characters (?, %, #, /, \\)."
+            exit 1
+          fi
+          
+          if [ -z "$CSRF_SECRET_KEY" ]; then
+            echo "❌ CSRF_SECRET_KEY variable cannot be empty."
+            exit 1
+          fi
+          
+          if [ -z "$CLOUDFLARE_AI_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_AI_TOKEN variable cannot be empty."
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured."
+          
+          INPUT_DOMAIN="${{ github.event.inputs.custom_domain }}"
+          if [ -n "$INPUT_DOMAIN" ]; then
+            echo "CUSTOM_DOMAIN=$INPUT_DOMAIN" >> $GITHUB_ENV
+          else
+            echo "CUSTOM_DOMAIN=$CUSTOM_DOMAIN" >> $GITHUB_ENV
+          fi
+          
+          echo "USE_ROUTES=$USE_ROUTES" >> $GITHUB_ENV
+
+      - name: ⚡ 设置KV数据库 / Set up KV database
+        working-directory: ./cloudflare
+        run: |
+          if [ -n "$KV_NAMESPACE_ID" ]; then
+            echo "✅ Using KV namespace from environment variables."
+          else
+            echo "🔍 Checking if KV namespace exists..."
+            set +e
+              KV_LIST=$(npx wrangler kv namespace list 2>&1)
+              STATUS=$?
+            set -e
+            
+            if [ $STATUS -ne 0 ]; then
+              echo "$KV_LIST"
+              exit 1
+            fi
+            
+            if echo "$KV_LIST" | jq -e ".[] | select(.title == \"$NAME\")" >/dev/null; then
+              echo "✅ KV namespace $NAME already exists."
+              KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
+            else
+              echo "⚠️ KV namespace $NAME does not exist. Creating..."
+              npx wrangler kv namespace create $NAME
+              KV_LIST=$(npx wrangler kv namespace list)
+              KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
+            fi
+            
+            echo "KV_NAMESPACE_ID=$KV_ID" >> $GITHUB_ENV
+          fi
+
+      - name: Set up D1 database
+        working-directory: ./cloudflare
+        run: |
+          if [ -n "$D1_DATABASE_ID" ]; then
+            echo "✅ Using D1 database from environment variables."
+          else
+            echo "🔍 Checking if D1 database exists..."
+            set +e
+              DB_LIST=$(npx wrangler d1 list --json 2>&1)
+              STATUS=$?
+            set -e
+            
+            if [ $STATUS -ne 0 ]; then
+              echo "$DB_LIST"
+              exit 1
+            fi
+            
+            if echo "$DB_LIST" | jq -e ".[] | select(.name == \"$NAME\")" >/dev/null; then
+              echo "✅ D1 database $NAME already exists."
+              D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
+            else
+              echo "⚠️ D1 database $NAME does not exist. Creating..."
+              npx wrangler d1 create $NAME
+              DB_LIST=$(npx wrangler d1 list --json)
+              D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
+            fi
+            
+            echo "D1_DATABASE_ID=$D1_ID" >> $GITHUB_ENV
+          fi
+
+      - name: Set up R2 bucket
+        working-directory: ./cloudflare
+        run: |
+          if [ -z "$R2_BUCKET_NAME" ]; then
+            echo "✅ R2 bucket not configured, skipping."
+          else
+            echo "🔍 Checking if R2 bucket exists..."
+            set +e
+              R2_LIST=$(npx wrangler r2 bucket list 2>&1)
+              STATUS=$?
+            set -e
+            
+            if [ $STATUS -ne 0 ]; then
+              echo "$R2_LIST"
+              exit 1
+            fi
+            
+            if echo "$R2_LIST" | grep -q "$R2_BUCKET_NAME"; then
+              echo "✅ R2 bucket $R2_BUCKET_NAME already exists."
+            else
+              echo "⚠️ R2 bucket $R2_BUCKET_NAME does not exist. Creating..."
+              npx wrangler r2 bucket create "$R2_BUCKET_NAME"
+            fi
+          fi
+
+      - name: Configure wrangler.toml
+        working-directory: ./cloudflare
+        run: |
+          cp wrangler-action.toml wrangler.toml
+          
+          sed -i "s/\${NAME}/${NAME}/g" wrangler.toml
+          sed -i "s/\${VERSION}/${VERSION}/g" wrangler.toml
+          sed -i "s/\${SITE_TITLE}/${SITE_TITLE}/g" wrangler.toml
+          sed -i "s/\${R2_BUCKET_NAME}/${R2_BUCKET_NAME}/g" wrangler.toml
+          sed -i "s/\${D1_DATABASE_ID}/${D1_DATABASE_ID}/g" wrangler.toml
+          sed -i "s/\${KV_NAMESPACE_ID}/${KV_NAMESPACE_ID}/g" wrangler.toml
+          
+          if [ -n "$CUSTOM_DOMAIN" ] && [ "$USE_ROUTES" = "true" ]; then
+            echo "🛤️ Using Routes mode"
+            DOMAIN_PART=$(echo "$CUSTOM_DOMAIN" | sed 's/^[a-z]*:\/\///' | sed 's/^\*\.\?//' | sed 's/^\.//')
+            
+            echo '[[routes]]' >> wrangler.toml
+            echo "pattern = \"*.'"$DOMAIN_PART"'/*\"" >> wrangler.toml
+            echo "zone_name = \""$DOMAIN_PART"\"" >> wrangler.toml
+            
+            echo "✅ Routes configured: *.$DOMAIN_PART/*"
+          elif [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "🛤️ Using Custom Domain: $CUSTOM_DOMAIN"
+          else
+            echo "🛤️ Using workers.dev"
+          fi
+          
+          echo "✅ wrangler.toml configured."
+
+      - name: Store secrets
+        working-directory: ./cloudflare
+        run: |
+          echo "🔐 Storing secrets to Cloudflare..."
+          
+          echo "${{ secrets.ADMIN_PASSWORD }}" | npx wrangler secret put ADMIN_PASSWORD
+          echo "${{ secrets.PASSWORD_SALT }}" | npx wrangler secret put PASSWORD_SALT
+          echo "${{ secrets.JWT_SECRET_KEY }}" | npx wrangler secret put JWT_SECRET_KEY
+          echo "${{ secrets.CSRF_SECRET_KEY }}" | npx wrangler secret put CSRF_SECRET_KEY
+          echo "${{ secrets.TURNSTILE_SECRET_KEY }}" | npx wrangler secret put TURNSTILE_SECRET_KEY
+          echo "${{ secrets.CLOUDFLARE_AI_TOKEN }}" | npx wrangler secret put CLOUDFLARE_AI_TOKEN
+          echo "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" | npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+          
+          echo "✅ Secrets stored."
+
+      - name: Update ALLOWED_DOMAINS as secret
+        working-directory: ./cloudflare
+        run: |
+          # 构建初始的 ALLOWED_DOMAINS（不含 worker URL，稍后单独添加）
+          ALLOWED_DOMAINS_BASE=""
+          
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            ALLOWED_DOMAINS_BASE="$CUSTOM_DOMAIN"
+          fi
+          
+          # 添加默认的 pages.dev
+          ALLOWED_DOMAINS_BASE="$ALLOWED_DOMAINS_BASE,$FRONTEND_URL"
+          
+          # 先删除已存在的 secret（如果存在）
+          npx wrangler secret delete ALLOWED_DOMAINS 2>/dev/null || true
+          
+          # 创建初始的 secret
+          echo "$ALLOWED_DOMAINS_BASE" | npx wrangler secret put ALLOWED_DOMAINS
+          echo "✅ ALLOWED_DOMAINS base stored as secret."
+          echo "$ALLOWED_DOMAINS_BASE"
+          
+          # 将基础值写入文件，供后续步骤使用
+          echo "$ALLOWED_DOMAINS_BASE" > allowed_domains_base.txt
+
+      - name: Run migrations
+        working-directory: ./cloudflare
+        run: |
+          npx wrangler d1 migrations apply "$NAME-chat" --remote
+          echo "✅ Migrations completed."
+
+      - name: Start deployment
+        id: deploy
+        working-directory: ./cloudflare
+        run: |
+          echo "🚀 Starting deployment..."
+          npx wrangler deploy 2>&1 | tee deploy.log || true
+          
+          DEPLOY_EXIT_CODE=${PIPESTATUS[0]}
+          if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
+            exit 1
+          fi
+          
+          WORKER_URL=$(grep -o "https://.*\.workers\.dev" deploy.log || echo "")
+          
+          if [ -n "$WORKER_URL" ]; then
+            echo "::add-mask::$WORKER_URL"
+            echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
+            echo "✅ Worker URL: $WORKER_URL"
+          fi
+          
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "custom_domain_url=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
+            echo "FINAL_URL=$CUSTOM_DOMAIN" >> $GITHUB_ENV
+            echo "::add-mask::$CUSTOM_DOMAIN"
+          else
+            echo "FINAL_URL=$WORKER_URL" >> $GITHUB_ENV
+          fi
+          
+          # 更新 ALLOWED_DOMAINS 添加 workers.dev URL
+          if [ -n "$WORKER_URL" ]; then
+            # 从文件获取基础 ALLOWED_DOMAINS
+            if [ -f "allowed_domains_base.txt" ]; then
+              CURRENT_ALLOWED=$(cat allowed_domains_base.txt)
+              NEW_ALLOWED_DOMAINS="${CURRENT_ALLOWED},${WORKER_URL}"
+              
+              # 删除并重新创建 secret
+              npx wrangler secret delete ALLOWED_DOMAINS 2>/dev/null || true
+              echo "$NEW_ALLOWED_DOMAINS" | npx wrangler secret put ALLOWED_DOMAINS
+              echo "✅ Updated ALLOWED_DOMAINS secret: $NEW_ALLOWED_DOMAINS"
+            else
+              echo "⚠️ allowed_domains_base.txt not found, skipping ALLOWED_DOMAINS update"
+            fi
+          fi
+
+      - name: Build Frontend
+        run: |
+          npm install
+          npm run build
+        env:
+          VITE_API_URL: ${{ env.FINAL_URL }}
+          VITE_WS_URL: ${{ env.FINAL_URL }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+
+      - name: Deploy Pages
+        id: deploy_pages
+        run: |
+          npx wrangler pages project create $NAME --production-branch main 2>/dev/null || true
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            DOMAIN_PART=$(echo "$CUSTOM_DOMAIN" | sed 's/^[a-z]*:\/\///')
+            npx wrangler pages deploy dist --project-name $NAME --domain $DOMAIN_PART 2>&1 | tee pages.log
+            echo "FRONTEND_URL=$CUSTOM_DOMAIN" >> $GITHUB_ENV
+          else
+            npx wrangler pages deploy dist --project-name $NAME 2>&1 | tee pages.log
+            PAGES_URL=$(grep -o "https://.*\.pages\.dev" pages.log | head -1)
+            echo "FRONTEND_URL=$PAGES_URL" >> $GITHUB_ENV
+          fi
+          echo "✅ Pages deployed."
+
+      - name: Initialize database
+        run: |
+          echo "🛠️ Starting database initialization..."
+          sleep 15
+          
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            WORKER_URL="$CUSTOM_DOMAIN"
+          else
+            WORKER_URL="${{ steps.deploy.outputs.worker_url }}"
+          fi
+          
+          HTTP_CODE=$(curl -sL -w "%{http_code}" -o response.txt "$WORKER_URL/api/init")
+          RESPONSE_BODY=$(cat response.txt)
+          
+          if [ "$RESPONSE_BODY" = "success" ] || [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
+            echo "✅ Database initialized."
+          else
+            echo "❌ Failed. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
+          fi
+
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        continue-on-error: true
+        with:
+          retain_days: '1'
+          keep_minimum_runs: '0'

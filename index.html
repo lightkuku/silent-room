@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" id="favicon-link" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Chat - 安全加密的即时通讯应用" id="meta-description" />
+    <link rel="preload" as="script" href="https://challenges.cloudflare.com/turnstile/v0/api.js" crossorigin="anonymous" />
+
+    <title id="page-title">Chat</title>
+    
+    <script>
+      (async function() {
+        try {
+          const res = await fetch('/api/site/config');
+          const data = await res.json();
+          if (data.success && data.data) {
+            const config = data.data;
+            if (config.title) document.getElementById('page-title').textContent = config.title;
+            if (config.favicon) document.getElementById('favicon-link').href = config.favicon;
+            if (config.description) document.getElementById('meta-description').content = config.description;
+            localStorage.setItem('siteConfig', JSON.stringify(config));
+          }
+        } catch (e) {
+          const config = JSON.parse(localStorage.getItem('siteConfig') || '{}');
+          if (config.title) document.getElementById('page-title').textContent = config.title;
+          if (config.favicon) document.getElementById('favicon-link').href = config.favicon;
+          if (config.description) document.getElementById('meta-description').content = config.description;
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
