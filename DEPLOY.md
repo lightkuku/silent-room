@@ -72,7 +72,7 @@ git push origin main
 
 ### 2. 手动部署
 
-在 GitHub 仓库页面点击 `Actions` → `Deploy Silent Room to Cloudflare Workers` → `Run workflow`
+在 GitHub 仓库页面点击 `Actions` → `Deploy to Cloudflare Workers` → `Run workflow`
 
 可输入自定义域名：
 - `custom_domain`: 自定义域名（如 `chat.example.com`）
@@ -141,15 +141,15 @@ npm run dev
 
 ```bash
 cd cloudflare
-pnpm install
-pnpm wrangler dev
+npm install
+npm wrangler dev
 ```
 
 ### 部署到本地
 
 ```bash
 cd cloudflare
-pnpm deploy
+npm deploy
 ```
 
 ## 注意事项
