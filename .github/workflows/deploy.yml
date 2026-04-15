@@ -12,7 +12,7 @@ on:
 
 jobs:
   Deploy:
-    name: Build and Deploy
+    name: Build and Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
 
     env:
