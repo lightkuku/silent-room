@@ -206,7 +206,6 @@ export const AdminPanel: React.FC<{ token: string | null; isSuperAdmin: boolean;
   const [sessionDetail, setSessionDetail] = useState<any>(null);
   
   const authToken = token || userToken || localStorage.getItem('adminToken');
-  console.log(authToken);
   const headers = { 'Authorization': `Bearer ${authToken}` };
 
   // 前端过滤函数

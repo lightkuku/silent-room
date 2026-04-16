@@ -3907,30 +3907,6 @@ app.post('/api/admin/login', async (c) => {
   return c.json({ success: true, data: { token, csrfToken, admin: { id: admin.id, role: admin.role || 'super_admin' } } });
 });
 
-// 管理员初始化/重置端点（临时使用）
-app.post('/api/admin/init', async (c) => {
-  const db = drizzle(c.env.DB);
-  const adminPassword = c.env.ADMIN_PASSWORD;
-  
-  if (!adminPassword) {
-    return c.json({ success: false, message: '管理员未配置' }, 500);
-  }
-  
-  // 删除现有管理员
-  await db.delete(schema.admins);
-  
-  // 创建新管理员
-  const hashedPassword = await hashPassword(adminPassword, c.env);
-  await db.insert(schema.admins).values({ 
-    id: crypto.randomUUID(), 
-    password: hashedPassword, 
-    createdAt: utcNow() 
-  });
-  
-  const admin = await db.select().from(schema.admins).get();
-  
-  return c.json({ success: true, message: '管理员已初始化', admin: { id: admin?.id } });
-});
 
 app.get('/api/admin/users', adminAuth, async (c) => {
   try {

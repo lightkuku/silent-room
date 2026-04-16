@@ -40,3 +40,4 @@ github-workflows/
 
 # 临时测试的配置文件
 cloudflare/wrangler_github_dev.toml
+cloudflare/.env
