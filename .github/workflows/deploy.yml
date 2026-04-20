@@ -14,7 +14,10 @@ jobs:
   Deploy:
     name: Build and Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
-
+    
+    artifacts:
+      retention-days: 3  # 保留 3 天
+      
     env:
       NAME: ${{ secrets.NAME || vars.NAME || 'silent-room' }}
       SITE_TITLE: ${{ secrets.NAME || vars.NAME || 'Silent Room' }}
@@ -376,6 +379,3 @@ jobs:
         with:
           retain_days: '1'
           keep_minimum_runs: '0'
-
-    artifacts:
-      retention-days: 3  # 保留 3 天
